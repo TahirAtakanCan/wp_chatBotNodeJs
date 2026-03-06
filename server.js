@@ -10,6 +10,16 @@ const qrcode = require('qrcode-terminal');
 const app = express();
 app.use(express.json());
 
+// ── İstek Zaman Aşımı Middleware ────────────────────────────────────
+app.use((req, res, next) => {
+    res.setTimeout(90000, () => {
+        if (!res.headersSent) {
+            res.status(504).json({ success: false, error: 'İstek zaman aşımına uğradı (90s)' });
+        }
+    });
+    next();
+});
+
 // ── Durum Yönetimi ──────────────────────────────────────────────────
 let sock = null;
 let isClientReady = false;
@@ -109,7 +119,7 @@ async function sendMessage(chatId, text, mediaUrl) {
 
     if (mediaUrl) {
         console.log(`[İNDİRİLİYOR] ${mediaUrl}`);
-        const response = await axios.get(mediaUrl, { responseType: 'arraybuffer' });
+        const response = await axios.get(mediaUrl, { responseType: 'arraybuffer', timeout: 30000 });
         const buffer = Buffer.from(response.data);
         const mimeType = response.headers['content-type'] || 'application/octet-stream';
         const fileName = mediaUrl.split('/').pop() || 'dosya';
@@ -125,9 +135,15 @@ async function sendMessage(chatId, text, mediaUrl) {
             messageContent = { document: buffer, mimetype: mimeType, fileName: fileName, caption: text || '' };
         }
 
-        await sock.sendMessage(jid, messageContent);
+        await Promise.race([
+            sock.sendMessage(jid, messageContent),
+            new Promise((_, reject) => setTimeout(() => reject(new Error('WhatsApp mesaj gönderme zaman aşımı (60s)')), 60000)),
+        ]);
     } else {
-        await sock.sendMessage(jid, { text: text || '' });
+        await Promise.race([
+            sock.sendMessage(jid, { text: text || '' }),
+            new Promise((_, reject) => setTimeout(() => reject(new Error('WhatsApp mesaj gönderme zaman aşımı (60s)')), 60000)),
+        ]);
     }
 }
 
