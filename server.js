@@ -20,6 +20,11 @@ app.use((req, res, next) => {
     next();
 });
 
+// ── QR / Bağlantı Durumu (REST ile dışarı açılıyor) ────────────────
+let currentQR = null;
+let isConnected = false;
+let connectedUser = null;
+
 // ── Durum Yönetimi ──────────────────────────────────────────────────
 let sock = null;
 let isClientReady = false;
@@ -59,21 +64,27 @@ async function startConnection() {
         sock.ev.on('connection.update', (update) => {
             const { connection, lastDisconnect, qr } = update;
 
-            // QR kodu geldiğinde terminale bas
+            // QR kodu geldiğinde global değişkene ata
             if (qr) {
-                console.log('\n--- QR KODU — LÜTFEN WHATSAPP İLE TARATIN ---');
-                qrcode.generate(qr, { small: true });
+                currentQR = qr;
+                isConnected = false;
+                console.log('\n--- QR KODU — /status endpoint\'inden alabilirsiniz ---');
             }
 
             if (connection === 'open') {
                 isClientReady = true;
                 isRestarting = false;
+                isConnected = true;
+                connectedUser = sock.user?.name || null;
+                currentQR = null;
                 console.log('✅ WhatsApp Bot Başarıyla Bağlandı ve Hazır!');
             }
 
             if (connection === 'close') {
                 isClientReady = false;
                 isRestarting = false;
+                isConnected = false;
+                connectedUser = null;
 
                 const statusCode = (lastDisconnect?.error instanceof Boom)
                     ? lastDisconnect.error.output.statusCode
@@ -169,6 +180,15 @@ app.post('/send', async (req, res) => {
         console.error('[HATA OLUŞTU]', error.message);
         res.status(500).json({ success: false, error: error.toString() });
     }
+});
+
+// ── QR / Bağlantı Durumu Endpoint'i ────────────────────────────────
+app.get('/status', (req, res) => {
+    res.json({
+        qr: currentQR,
+        connected: isConnected,
+        user: connectedUser,
+    });
 });
 
 // ── Sağlık Kontrolü ────────────────────────────────────────────────
