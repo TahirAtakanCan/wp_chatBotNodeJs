@@ -182,6 +182,45 @@ app.post('/send', async (req, res) => {
     }
 });
 
+// ── Base64 Medya Gönderme (Flutter → Node.js) ──────────────────────
+app.post('/send-media', async (req, res) => {
+    try {
+        if (!isClientReady) {
+            return res.status(503).json({
+                success: false,
+                error: 'WhatsApp client henüz hazır değil. Lütfen birkaç saniye sonra tekrar deneyin.',
+            });
+        }
+
+        const { phone, imageBase64, mimeType, caption } = req.body;
+
+        if (!phone || !imageBase64 || !mimeType) {
+            return res.status(400).json({
+                success: false,
+                error: 'phone, imageBase64 ve mimeType alanları zorunludur.',
+            });
+        }
+
+        const chatId = phone.replace('@c.us', '');
+        const jid = chatId.includes('@') ? chatId : `${chatId}@s.whatsapp.net`;
+
+        const buffer = Buffer.from(imageBase64, 'base64');
+
+        const messageContent = { image: buffer, mimetype: mimeType, caption: caption || '' };
+
+        await Promise.race([
+            sock.sendMessage(jid, messageContent),
+            new Promise((_, reject) => setTimeout(() => reject(new Error('WhatsApp mesaj gönderme zaman aşımı (60s)')), 60000)),
+        ]);
+
+        console.log(`[GÖNDERİLDİ] Base64 medya -> ${phone}`);
+        res.status(200).json({ success: true });
+    } catch (error) {
+        console.error('[HATA OLUŞTU]', error.message);
+        res.status(500).json({ success: false, error: error.toString() });
+    }
+});
+
 // ── QR / Bağlantı Durumu Endpoint'i ────────────────────────────────
 app.get('/status', (req, res) => {
     res.json({
