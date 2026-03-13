@@ -159,20 +159,33 @@ async function sendMessage(sessionId, chatId, text, mediaUrl) {
 
     // --- ANTİ-SPAM: İNSAN SİMÜLASYONU (YAZIYOR EFEKTİ) ---
     try {
-        // Karşı tarafa sohbeti açmış ve yazıyor gibi görün
         await sock.sendPresenceUpdate('composing', jid);
         
-        // 3 ile 8 saniye arası rastgele bir insan bekleme süresi oluştur
-        const waitTime = Math.floor(Math.random() * (10000 - 5000 + 1)) + 5000;
-        console.log(`[${sessionId}] ${jid} hedefine mesaj atılmadan önce ${waitTime/1000} saniye 'Yazıyor...' simülasyonu uygulanıyor.`);
+        // Gönderilecek metnin karakter sayısını bul (metin yoksa 0)
+        const messageLength = text ? text.length : 0;
         
-        // Sistemi o süre kadar uyut
-        await new Promise(resolve => setTimeout(resolve, waitTime));
+        // Bir insanın saniyede 15 harf yazdığı varsayılır
+        let baseWaitTime = Math.floor((messageLength / 15) * 1000);
+        
+        // Süre çok kısa olmasın (En az 4 ile 6 saniye arası garanti olsun)
+        if (baseWaitTime < 4000) {
+            baseWaitTime = 4000 + Math.floor(Math.random() * 2000); 
+        }
+        
+        // Süre çok uzun olup sistemi kilitlemesin (Maksimum 25 saniye)
+        if (baseWaitTime > 25000) {
+            baseWaitTime = 25000;
+        }
 
-        // Yazmayı bitir (paused)
+        // Çok robotik görünmemesi için süreye ufak bir rastgelelik (-1 sn ile +2 sn arası) ekle
+        const finalWaitTime = baseWaitTime + (Math.floor(Math.random() * 3000) - 1000);
+
+        console.log(`[${sessionId}] ${jid} hedefine ${messageLength} karakterlik mesaj için ${finalWaitTime/1000} saniye 'Yazıyor...' efekti uygulanıyor.`);
+        
+        await new Promise(resolve => setTimeout(resolve, finalWaitTime));
         await sock.sendPresenceUpdate('paused', jid);
     } catch (e) {
-        console.warn(`[${sessionId}] 'Yazıyor' efekti hatası (Gönderime engel değil):`, e.message);
+        console.warn(`[${sessionId}] 'Yazıyor' efekti hatası:`, e.message);
     }
     // -----------------------------------------------------
 
