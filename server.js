@@ -20,13 +20,10 @@ app.use((req, res, next) => {
 });
 
 // ── Multi-Session Yönetimi ──────────────────────────────────────────
-// Her session: { sock, currentQR, isConnected, connectedUser, isClientReady, isRestarting, authDir }
 const sessions = new Map();
-
 const SESSIONS_ROOT = path.join(__dirname, 'sessions');
 const logger = pino({ level: 'silent' });
 
-// sessions klasörü yoksa oluştur
 if (!fs.existsSync(SESSIONS_ROOT)) {
     fs.mkdirSync(SESSIONS_ROOT, { recursive: true });
 }
@@ -46,7 +43,6 @@ async function createSession(sessionId) {
         fs.mkdirSync(authDir, { recursive: true });
     }
 
-    // Session state'ini başlangıç değerleriyle kaydet
     const sessionState = {
         sock: null,
         currentQR: null,
@@ -75,11 +71,8 @@ async function createSession(sessionId) {
         });
 
         sessionState.sock = sock;
-
-        // Kimlik bilgilerini kaydet
         sock.ev.on('creds.update', saveCreds);
 
-        // Bağlantı durumu
         sock.ev.on('connection.update', (update) => {
             const { connection, lastDisconnect, qr } = update;
 
@@ -120,12 +113,10 @@ async function createSession(sessionId) {
                     return;
                 }
 
-                // Yeniden bağlan
                 console.log(`[${sessionId}] ♻️ 5 saniye sonra yeniden bağlanılacak...`);
                 setTimeout(() => createSession(sessionId), 5000);
             }
         });
-
     } catch (err) {
         console.error(`[${sessionId}] ❌ Bağlantı başlatılamadı:`, err.message);
         if (sessions.has(sessionId)) {
@@ -135,7 +126,6 @@ async function createSession(sessionId) {
     }
 }
 
-// ── Session Kapat ve Sil ────────────────────────────────────────────
 async function deleteSession(sessionId) {
     const session = sessions.get(sessionId);
     if (!session) return false;
@@ -157,7 +147,7 @@ async function deleteSession(sessionId) {
     return true;
 }
 
-// ── Mesaj Gönderme ──────────────────────────────────────────────────
+// ── Mesaj Gönderme (YAZIYOR EFEKTİ EKLENDİ) ──────────────────────────
 async function sendMessage(sessionId, chatId, text, mediaUrl) {
     const session = sessions.get(sessionId);
     if (!session || !session.isClientReady) {
@@ -166,6 +156,25 @@ async function sendMessage(sessionId, chatId, text, mediaUrl) {
 
     const jid = chatId.includes('@') ? chatId : `${chatId}@s.whatsapp.net`;
     const { sock } = session;
+
+    // --- ANTİ-SPAM: İNSAN SİMÜLASYONU (YAZIYOR EFEKTİ) ---
+    try {
+        // Karşı tarafa sohbeti açmış ve yazıyor gibi görün
+        await sock.sendPresenceUpdate('composing', jid);
+        
+        // 3 ile 8 saniye arası rastgele bir insan bekleme süresi oluştur
+        const waitTime = Math.floor(Math.random() * (10000 - 5000 + 1)) + 5000;
+        console.log(`[${sessionId}] ${jid} hedefine mesaj atılmadan önce ${waitTime/1000} saniye 'Yazıyor...' simülasyonu uygulanıyor.`);
+        
+        // Sistemi o süre kadar uyut
+        await new Promise(resolve => setTimeout(resolve, waitTime));
+
+        // Yazmayı bitir (paused)
+        await sock.sendPresenceUpdate('paused', jid);
+    } catch (e) {
+        console.warn(`[${sessionId}] 'Yazıyor' efekti hatası (Gönderime engel değil):`, e.message);
+    }
+    // -----------------------------------------------------
 
     if (mediaUrl) {
         console.log(`[${sessionId}] [İNDİRİLİYOR] ${mediaUrl}`);
@@ -200,79 +209,47 @@ async function sendMessage(sessionId, chatId, text, mediaUrl) {
 // ═══════════════════════════════════════════════════════════════════
 //  SESSION YÖNETİM ENDPOINTLERİ
 // ═══════════════════════════════════════════════════════════════════
-
-// Yeni session oluştur
 app.post('/session/create', async (req, res) => {
     const { sessionId } = req.body;
-    if (!sessionId) {
-        return res.status(400).json({ success: false, error: 'sessionId zorunludur.' });
-    }
-    if (sessions.has(sessionId)) {
-        return res.status(409).json({ success: false, error: `'${sessionId}' session zaten mevcut.` });
-    }
+    if (!sessionId) return res.status(400).json({ success: false, error: 'sessionId zorunludur.' });
+    if (sessions.has(sessionId)) return res.status(409).json({ success: false, error: `'${sessionId}' session zaten mevcut.` });
 
     await createSession(sessionId);
     res.json({ success: true, message: `'${sessionId}' session başlatıldı. QR için /session/${sessionId}/status` });
 });
 
-// Session sil
 app.delete('/session/:sessionId', async (req, res) => {
     const { sessionId } = req.params;
     const result = await deleteSession(sessionId);
-    if (!result) {
-        return res.status(404).json({ success: false, error: `'${sessionId}' session bulunamadı.` });
-    }
+    if (!result) return res.status(404).json({ success: false, error: `'${sessionId}' session bulunamadı.` });
     res.json({ success: true, message: `'${sessionId}' session silindi.` });
 });
 
-// Belirli bir session'ın durumu (QR dahil)
 app.get('/session/:sessionId/status', (req, res) => {
     const { sessionId } = req.params;
     const session = sessions.get(sessionId);
-    if (!session) {
-        return res.status(404).json({ success: false, error: `'${sessionId}' session bulunamadı.` });
-    }
-    res.json({
-        sessionId,
-        qr: session.currentQR,
-        connected: session.isConnected,
-        user: session.connectedUser,
-        ready: session.isClientReady,
-    });
+    if (!session) return res.status(404).json({ success: false, error: `'${sessionId}' session bulunamadı.` });
+    res.json({ sessionId, qr: session.currentQR, connected: session.isConnected, user: session.connectedUser, ready: session.isClientReady });
 });
 
-// Tüm aktif session'lar
 app.get('/sessions', (req, res) => {
     const list = [];
     sessions.forEach((session, sessionId) => {
-        list.push({
-            sessionId,
-            connected: session.isConnected,
-            user: session.connectedUser,
-            ready: session.isClientReady,
-            hasQR: !!session.currentQR,
-        });
+        list.push({ sessionId, connected: session.isConnected, user: session.connectedUser, ready: session.isClientReady, hasQR: !!session.currentQR });
     });
     res.json({ success: true, sessions: list });
 });
 
 // ═══════════════════════════════════════════════════════════════════
-//  MESAJ ENDPOINTLERİ (session bazlı)
+//  MESAJ ENDPOINTLERİ
 // ═══════════════════════════════════════════════════════════════════
-
-// Metin / medya URL ile mesaj gönder
 app.post('/send', async (req, res) => {
     try {
         const { sessionId, number, message, mediaUrl } = req.body;
-
-        if (!sessionId) {
-            return res.status(400).json({ success: false, error: 'sessionId zorunludur.' });
-        }
+        if (!sessionId) return res.status(400).json({ success: false, error: 'sessionId zorunludur.' });
 
         const session = sessions.get(sessionId);
-        if (!session || !session.isClientReady) {
-            return res.status(503).json({ success: false, error: `[${sessionId}] WhatsApp client hazır değil.` });
-        }
+        if (!session || !session.isClientReady) return res.status(503).json({ success: false, error: `[${sessionId}] WhatsApp client hazır değil.` });
 
         const chatId = number.replace('@c.us', '');
         await sendMessage(sessionId, chatId, message, mediaUrl);
@@ -285,27 +262,31 @@ app.post('/send', async (req, res) => {
     }
 });
 
-// Base64 resim gönder
+// Base64 resim gönder (YAZIYOR EFEKTİ BURAYA DA EKLENDİ)
 app.post('/send-media', async (req, res) => {
     try {
         const { sessionId, phone, imageBase64, mimeType, caption } = req.body;
-
-        if (!sessionId) {
-            return res.status(400).json({ success: false, error: 'sessionId zorunludur.' });
-        }
+        if (!sessionId) return res.status(400).json({ success: false, error: 'sessionId zorunludur.' });
 
         const session = sessions.get(sessionId);
-        if (!session || !session.isClientReady) {
-            return res.status(503).json({ success: false, error: `[${sessionId}] WhatsApp client hazır değil.` });
-        }
+        if (!session || !session.isClientReady) return res.status(503).json({ success: false, error: `[${sessionId}] WhatsApp client hazır değil.` });
 
-        if (!phone || !imageBase64 || !mimeType) {
-            return res.status(400).json({ success: false, error: 'phone, imageBase64 ve mimeType zorunludur.' });
-        }
+        if (!phone || !imageBase64 || !mimeType) return res.status(400).json({ success: false, error: 'phone, imageBase64 ve mimeType zorunludur.' });
 
         const chatId = phone.replace('@c.us', '');
         const jid = chatId.includes('@') ? chatId : `${chatId}@s.whatsapp.net`;
         const buffer = Buffer.from(imageBase64, 'base64');
+
+        // --- ANTİ-SPAM: MEDYA YÜKLEME SİMÜLASYONU ---
+        try {
+            await session.sock.sendPresenceUpdate('composing', jid);
+            // 5 ile 20 saniye arası (5000ms - 20000ms) rastgele bekleme süresi
+            const waitTime = Math.floor(Math.random() * (20000 - 5000 + 1)) + 5000;
+            console.log(`[${sessionId}] ${jid} için ${waitTime/1000} sn medya yükleme simülasyonu.`);
+            await new Promise(resolve => setTimeout(resolve, waitTime));
+            await session.sock.sendPresenceUpdate('paused', jid);
+        } catch (e) {}
+        // --------------------------------------------
 
         await Promise.race([
             session.sock.sendMessage(jid, { image: buffer, mimetype: mimeType, caption: caption || '' }),
@@ -320,64 +301,37 @@ app.post('/send-media', async (req, res) => {
     }
 });
 
-// ═══════════════════════════════════════════════════════════════════
-//  GERİYE DÖNÜK UYUMLULUK — Eski tek-session endpoint'leri
-//  (Java tarafı güncellenmeden önce çalışmaya devam etsin)
-// ═══════════════════════════════════════════════════════════════════
 app.get('/status', (req, res) => {
-    // "default" session varsa onu döndür, yoksa ilk session'ı döndür
     const session = sessions.get('default') || sessions.values().next().value;
-    if (!session) {
-        return res.json({ qr: null, connected: false, user: null });
-    }
+    if (!session) return res.json({ qr: null, connected: false, user: null });
     res.json({ qr: session.currentQR, connected: session.isConnected, user: session.connectedUser });
 });
 
-// ── Sağlık Kontrolü ────────────────────────────────────────────────
 app.get('/health', (req, res) => {
-    res.json({
-        uptime: process.uptime(),
-        activeSessions: sessions.size,
-        sessions: Array.from(sessions.keys()),
-    });
+    res.json({ uptime: process.uptime(), activeSessions: sessions.size, sessions: Array.from(sessions.keys()) });
 });
 
-// ── Process-seviyesi hata yakalama ──────────────────────────────────
 process.on('uncaughtException', (err) => {
     console.error('❌ [UNCAUGHT EXCEPTION]', err.message);
-    console.error(err.stack);
 });
-
 process.on('unhandledRejection', (reason) => {
     console.error('❌ [UNHANDLED REJECTION]', reason);
 });
 
-// ═══════════════════════════════════════════════════════════════════
-//  SUNUCU BAŞLAT + MEVCUT SESSIONLARİ YÜKLE
-// ═══════════════════════════════════════════════════════════════════
 const server = app.listen(3000, () => {
     console.log('🚀 Node.js WhatsApp Multi-Session Servisi 3000 portunda başlatıldı...');
-
-    // sessions/ klasöründeki mevcut session'ları otomatik yükle
     if (fs.existsSync(SESSIONS_ROOT)) {
-        const existingSessions = fs.readdirSync(SESSIONS_ROOT).filter(name => {
-            return fs.statSync(path.join(SESSIONS_ROOT, name)).isDirectory();
-        });
-
+        const existingSessions = fs.readdirSync(SESSIONS_ROOT).filter(name => fs.statSync(path.join(SESSIONS_ROOT, name)).isDirectory());
         if (existingSessions.length > 0) {
             console.log(`📂 ${existingSessions.length} mevcut session bulundu, yükleniyor:`, existingSessions);
             existingSessions.forEach(sessionId => createSession(sessionId));
-        } else {
-            console.log('📂 Mevcut session bulunamadı. Yeni session oluşturmak için POST /session/create');
         }
     }
 });
 
 server.on('error', (err) => {
     if (err.code === 'EADDRINUSE') {
-        console.error(`❌ Port 3000 zaten kullanımda! Önceki process'i kapatın:\n   lsof -i :3000 -t | xargs kill -9`);
-    } else {
-        console.error('❌ Sunucu hatası:', err.message);
+        console.error(`❌ Port 3000 zaten kullanımda!`);
     }
     process.exit(1);
 });
